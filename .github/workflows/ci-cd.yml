@@ -9,6 +9,10 @@ on:
     # Runs at 2:00 AM UTC every night to catch dependency drift
     - cron: '0 2 * * *'
 
+# This silences the Node 20 deprecation warning for GitHub's backend runners
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
