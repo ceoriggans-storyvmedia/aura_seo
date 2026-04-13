@@ -32,9 +32,13 @@ jobs:
       - name: Verify Lockfile Synchronization (Supply Chain Scan)
         run: |
           uv pip compile requirements.in --generate-hashes -o temp_requirements.txt
-          if ! cmp -s requirements.txt temp_requirements.txt; then
-            echo "CRITICAL: Lockfile drift detected! The requirements.txt does not match requirements.in."
-            echo "Run 'uv pip compile requirements.in --generate-hashes -o requirements.txt' locally and commit the changes."
+          
+          # Use diff -w to ignore Windows (CRLF) vs Linux (LF) line ending differences
+          if ! diff -w requirements.txt temp_requirements.txt; then
+            echo "======================================================================"
+            echo "CRITICAL: Lockfile drift detected! See the diff output above."
+            echo "Ensure you ran 'uv pip compile requirements.in --generate-hashes -o requirements.txt' and committed the result."
+            echo "======================================================================"
             exit 1
           fi
 
