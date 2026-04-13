@@ -1,0 +1,6 @@
+{"id": "issue-001", "title": "Initialize Project", "state": "closed", "dependencies": []}
+{"id": "test-suite-init", "title": "Test Suite Implementation", "state": "open", "dependencies": []}
+{"id": "supply-chain-scan", "title": "Supply Chain Scan", "state": "open", "dependencies": []}
+{"id": "ci-cd-pipeline", "title": "Scheduled Testing Pipeline", "state": "open", "dependencies": ["test-suite-init", "supply-chain-scan"]}
+{"id": "sec-01", "title": "Input Sanitization on URL Inputs", "state": "closed", "dependencies": []}
+{"id": "supply-01", "title": "Implement Deterministic Lockfiles", "state": "in_progress", "dependencies": []}
