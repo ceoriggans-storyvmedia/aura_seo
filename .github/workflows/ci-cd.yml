@@ -1,0 +1,46 @@
+name: AuraSEO Security & CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    # Runs at 2:00 AM UTC every night to catch dependency drift
+    - cron: '0 2 * * *'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14.3"
+
+      - name: Install uv package manager
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Verify Lockfile Synchronization (Supply Chain Scan)
+        run: |
+          uv pip compile requirements.in --generate-hashes -o temp_requirements.txt
+          if ! cmp -s requirements.txt temp_requirements.txt; then
+            echo "CRITICAL: Lockfile drift detected! The requirements.txt does not match requirements.in."
+            echo "Run 'uv pip compile requirements.in --generate-hashes -o requirements.txt' locally and commit the changes."
+            exit 1
+          fi
+
+      - name: Install Dependencies
+        run: uv pip sync requirements.txt
+
+      - name: Run Test Suite
+        run: uv run pytest test_aura_seo.py -v
+
+      - name: Vulnerability Audit (Supply Chain Scan)
+        run: |
+          uv pip install pip-audit
+          uv run pip-audit -r requirements.txt
