@@ -34,12 +34,14 @@ jobs:
 
       - name: Verify Lockfile Synchronization (Supply Chain Scan)
         run: |
-          uv pip compile requirements.in --generate-hashes -o temp_requirements.txt
+          # Compile directly to requirements.txt so the header matches your local file
+          uv pip compile requirements.in --generate-hashes -o requirements.txt
           
-          if ! diff -w requirements.txt temp_requirements.txt; then
+          # Ask Git if the compile command resulted in any actual changes to the file
+          if [ -n "$(git status --porcelain requirements.txt)" ]; then
             echo "======================================================================"
-            echo "CRITICAL: Lockfile drift detected! See the diff output above."
-            echo "Ensure you ran 'uv pip compile requirements.in --generate-hashes -o requirements.txt' locally and committed the result."
+            echo "CRITICAL: Lockfile drift detected! See the exact differences below:"
+            git diff requirements.txt
             echo "======================================================================"
             exit 1
           fi
