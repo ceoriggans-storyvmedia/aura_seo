@@ -38,18 +38,20 @@ jobs:
           
           python -c "
           import sys
-          def read_reqs(filepath):
-              with open(filepath, 'r', encoding='utf-8') as f:
-                  # Strip line endings/whitespace and ignore comment headers
-                  return [line.strip() for line in f if line.strip() and not line.startswith('#')]
+          def parse_lockfile(path):
+              with open(path, 'r', encoding='utf-8') as f:
+                  return set(line.strip() for line in f if line.strip() and not line.strip().startswith('#'))
           
-          req_local = read_reqs('requirements.txt')
-          req_server = read_reqs('temp_requirements.txt')
+          local_reqs = parse_lockfile('requirements.txt')
+          server_reqs = parse_lockfile('temp_requirements.txt')
           
-          if req_local != req_server:
+          if local_reqs != server_reqs:
               print('======================================================================')
               print('CRITICAL: Lockfile drift detected!')
-              print('Ensure you ran uv pip compile locally and committed the requirements.txt')
+              print('\n--- IN YOUR LOCAL REPO BUT MISSING/DIFFERENT ON SERVER ---')
+              for item in sorted(local_reqs - server_reqs): print('->', item)
+              print('\n--- ON THE SERVER BUT MISSING/DIFFERENT IN YOUR LOCAL REPO ---')
+              for item in sorted(server_reqs - local_reqs): print('->', item)
               print('======================================================================')
               sys.exit(1)
           "
