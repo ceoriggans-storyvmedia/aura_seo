@@ -15,7 +15,10 @@ env:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     
     steps:
       - name: Checkout repository
@@ -27,17 +30,16 @@ jobs:
           python-version: "3.14.3"
 
       - name: Install uv package manager
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        run: pip install uv
 
       - name: Verify Lockfile Synchronization (Supply Chain Scan)
         run: |
           uv pip compile requirements.in --generate-hashes -o temp_requirements.txt
           
-          # Use diff -w to ignore Windows (CRLF) vs Linux (LF) line ending differences
           if ! diff -w requirements.txt temp_requirements.txt; then
             echo "======================================================================"
             echo "CRITICAL: Lockfile drift detected! See the diff output above."
-            echo "Ensure you ran 'uv pip compile requirements.in --generate-hashes -o requirements.txt' and committed the result."
+            echo "Ensure you ran 'uv pip compile requirements.in --generate-hashes -o requirements.txt' locally and committed the result."
             echo "======================================================================"
             exit 1
           fi
