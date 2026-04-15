@@ -56,8 +56,10 @@ jobs:
               sys.exit(1)
           "
 
-      - name: Install Dependencies
-        run: uv pip sync requirements.txt
+      - name: Create Virtual Environment & Install Dependencies
+        run: |
+          uv venv
+          uv pip sync requirements.txt
 
       - name: Run Test Suite
         run: uv run pytest test_aura_seo.py -v
