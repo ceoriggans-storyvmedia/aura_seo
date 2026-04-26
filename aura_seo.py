@@ -148,13 +148,15 @@ def generate_llms_txt(url, title, passages):
         llms_content += f"- {p['Full_Passage']}\n"
     return llms_content
 
-def rewrite_paragraph_with_gemini(original_text, max_retries=3):
+def rewrite_paragraph_with_gemini(original_text, max_retries=5):
+    """An agentic loop that forces Gemini to self-correct its word count."""
     if not gemini_client:
         return "Error: Gemini API Key not configured in config.yaml"
         
-    prompt = f"""
+    base_prompt = f"""
     You are an expert SEO copywriter optimizing content for Generative AI search engines.
     Rewrite the following paragraph so that it is EXACTLY between 134 and 167 words long.
+    This is a strict mathematical requirement. If the text is too short, you MUST expand on the ideas with relevant, professional details to reach at least 134 words.
     Maintain the original meaning, tone, and key facts. 
     Do not add introductory or concluding conversational filler. Just output the rewritten paragraph.
     
@@ -162,17 +164,40 @@ def rewrite_paragraph_with_gemini(original_text, max_retries=3):
     {original_text}
     """
     
+    current_prompt = base_prompt
+    
     for attempt in range(max_retries):
         try:
-            # Swapped to the Pro model tier
             response = gemini_client.models.generate_content(
-                model='gemini-2.5-pro',
-                contents=prompt,
+                model='gemini-2.5-flash',
+                contents=current_prompt,
             )
-            return response.text.strip()
+            result_text = response.text.strip()
+            word_count = len(result_text.split())
+            
+            # Check if it hit the exact target range
+            if 134 <= word_count <= 167:
+                return result_text
+            
+            # If it failed, generate a self-correction prompt for the next loop
+            if attempt < max_retries - 1:
+                direction = "EXPAND and ADD MORE DETAIL" if word_count < 134 else "CONDENSE and CUT WORDS"
+                current_prompt = f"""
+                CRITICAL FEEDBACK: Your previous attempt was exactly {word_count} words long. This is UNACCEPTABLE. 
+                You must {direction} to hit the strict target of 134 to 167 words. 
+                Try again.
+                
+                {base_prompt}
+                """
+                time.sleep(2) # Give the free-tier server a breather
+                continue
+            else:
+                # If we run out of retries, return the best effort we got
+                return result_text
+                
         except Exception as e:
             if attempt < max_retries - 1:
-                time.sleep(2) # Wait 2 seconds before trying again to bypass 503 limits
+                time.sleep(5) 
                 continue
             return f"API Error: {str(e)}"
 
@@ -272,10 +297,9 @@ elif st.session_state["authentication_status"]:
                     with col_action:
                         if p["Status"] != "Optimal" and gemini_client:
                             if st.button(f"✨ Auto-Rewrite", key=f"rewrite_{i}"):
-                                with st.spinner("Rewriting..."):
+                                with st.spinner("Agentic Rewrite in Progress (This may take a few seconds if self-correction is required)..."):
                                     new_text = rewrite_paragraph_with_gemini(p["Full_Passage"])
                                     
-                                    # Properly handle hard API failures
                                     if new_text.startswith("API Error") or new_text.startswith("Error"):
                                         st.error(f"Failed to generate: {new_text}")
                                     else:
