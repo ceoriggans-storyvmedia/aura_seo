@@ -36,8 +36,17 @@ BROWSER_HEADERS = {
 }
 
 # --- AUTHENTICATION & SECRETS SETUP ---
-with open('config.yaml') as file:
-    config = yaml.load(file, Loader=SafeLoader)
+# Added robust error handling for CI/CD environments where config.yaml is ignored
+try:
+    with open('config.yaml') as file:
+        config = yaml.load(file, Loader=SafeLoader)
+except FileNotFoundError:
+    config = {
+        'credentials': {'usernames': {}},
+        'cookie': {'name': 'ci_dummy_cookie', 'key': 'ci_dummy_key', 'expiry_days': 1},
+        'api_keys': {'gemini': None},
+        'preauthorized': {'emails': []}
+    }
 
 authenticator = stauth.Authenticate(
     config['credentials'],
@@ -243,7 +252,6 @@ elif st.session_state["authentication_status"]:
         
         st.header("Project Settings")
         
-        # New speed control toggle
         scrape_engine = st.radio("Scraping Engine", ["Fast HTML (Requests - Blazing Fast)", "Deep JS (Playwright - Slow)"])
         
         st.divider()
@@ -304,7 +312,6 @@ elif st.session_state["authentication_status"]:
         for idx, url in enumerate(urls_to_audit):
             with st.spinner(f"Auditing page {idx + 1} of {len(urls_to_audit)}: {url}"):
                 crawler_status = check_ai_crawlers(url)
-                # Pass the engine choice to the readiness function
                 passages, site_title = audit_content_readiness(url, scrape_engine)
                 
                 batch_results.append({
@@ -315,8 +322,6 @@ elif st.session_state["authentication_status"]:
                 })
                 progress_bar.progress((idx + 1) / len(urls_to_audit))
                 
-                # Only sleep if we aren't using the slow Playwright engine, 
-                # as Playwright takes long enough to not get rate-limited natively.
                 if scrape_engine == "Fast HTML (Requests - Blazing Fast)":
                     time.sleep(1) 
         
@@ -326,7 +331,6 @@ elif st.session_state["authentication_status"]:
     if st.session_state["audit_batch_data"]:
         batch_data = st.session_state["audit_batch_data"]
         
-        # Create dynamic tabs using the site titles
         tab_names = [f"{data['title'][:25]}..." if len(data['title']) > 25 else data['title'] for data in batch_data]
         tabs = st.tabs(tab_names)
         
@@ -366,7 +370,6 @@ elif st.session_state["authentication_status"]:
                                     
                             with col_action:
                                 if p["Status"] != "Optimal" and gemini_client:
-                                    # Ensure unique keys for buttons across multiple tabs
                                     if st.button(f"✨ Auto-Rewrite", key=f"rewrite_{tab_idx}_{p_idx}"):
                                         with st.spinner("Agentic Rewrite in Progress..."):
                                             new_text = rewrite_paragraph_with_gemini(p["Full_Passage"])
