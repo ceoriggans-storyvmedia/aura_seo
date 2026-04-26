@@ -1,16 +1,21 @@
-# Python Virtual Environment
+﻿# Security
+config.yaml
+.env
+
+# Virtual Environments
 .venv/
-venv/
 env/
+venv/
 
 # Python Cache
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 
-# Environment Variables
-.env
+# Playwright & Browser Binaries
+.playwright/
 
-# OS Files
+# OS Generated Files
 .DS_Store
 Thumbs.db

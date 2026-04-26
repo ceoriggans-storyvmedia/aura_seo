@@ -3,5 +3,8 @@ requests
 beautifulsoup4
 pandas
 reportlab
-pytest
-responses
+streamlit-authenticator
+pyyaml
+playwright
+playwright-stealth
+google-genai
