@@ -53,7 +53,7 @@ if gemini_key and gemini_key != "YOUR_ACTUAL_API_KEY":
 else:
     gemini_client = None
 
-# --- SECURITY ---
+# --- SECURITY & UTILITIES ---
 def sanitize_and_validate_url(url: str) -> bool:
     try:
         result = urlparse(url)
@@ -66,6 +66,15 @@ def sanitize_and_validate_url(url: str) -> bool:
         return True
     except ValueError:
         return False
+
+def extract_urls_from_sitemap(sitemap_url, max_urls=5):
+    try:
+        res = requests.get(sitemap_url, headers=BROWSER_HEADERS, timeout=10)
+        res.raise_for_status()
+        urls = re.findall(r'<loc>(.*?)</loc>', res.text)
+        return urls[:max_urls] if urls else []
+    except Exception as e:
+        return []
 
 # --- CORE LOGIC ---
 def check_ai_crawlers(base_url):
@@ -83,32 +92,33 @@ def check_ai_crawlers(base_url):
         results = {bot: "Unknown (No robots.txt)" for bot in AI_CRAWLERS}
     return results
 
-def audit_content_readiness(url):
+def audit_content_readiness(url, engine_choice):
     html_content = ""
     page_title = "Untitled"
     scraper_errors = []
 
-    # ENGINE 1: Attempt Playwright for JS execution
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-            context = browser.new_context(
-                user_agent=BROWSER_HEADERS["User-Agent"],
-                viewport={"width": 1920, "height": 1080},
-                locale="en-US",
-                timezone_id="America/New_York"
-            )
-            stealth = Stealth()
-            stealth.apply_stealth_sync(context)
-            page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=15000)
-            html_content = page.content()
-            page_title = page.title()
-            browser.close()
-    except Exception as e:
-        scraper_errors.append(f"Playwright Error: {str(e)}")
+    # ENGINE 1: Attempt Playwright for JS execution (Only if Deep JS is selected)
+    if engine_choice == "Deep JS (Playwright - Slow)":
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+                context = browser.new_context(
+                    user_agent=BROWSER_HEADERS["User-Agent"],
+                    viewport={"width": 1920, "height": 1080},
+                    locale="en-US",
+                    timezone_id="America/New_York"
+                )
+                stealth = Stealth()
+                stealth.apply_stealth_sync(context)
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                html_content = page.content()
+                page_title = page.title()
+                browser.close()
+        except Exception as e:
+            scraper_errors.append(f"Playwright Error: {str(e)}")
 
-    # ENGINE 2: Fallback to requests if Playwright crashed or returned empty HTML
+    # ENGINE 2: Fallback to requests if Playwright crashed, returned empty, or Fast Mode is selected
     if not html_content or len(html_content) < 500:
         try:
             res = requests.get(url, headers=BROWSER_HEADERS, timeout=10)
@@ -175,11 +185,9 @@ def rewrite_paragraph_with_gemini(original_text, max_retries=5):
             result_text = response.text.strip()
             word_count = len(result_text.split())
             
-            # Check if it hit the exact target range
             if 134 <= word_count <= 167:
                 return result_text
             
-            # If it failed, generate a self-correction prompt for the next loop
             if attempt < max_retries - 1:
                 direction = "EXPAND and ADD MORE DETAIL" if word_count < 134 else "CONDENSE and CUT WORDS"
                 current_prompt = f"""
@@ -189,10 +197,9 @@ def rewrite_paragraph_with_gemini(original_text, max_retries=5):
                 
                 {base_prompt}
                 """
-                time.sleep(2) # Give the free-tier server a breather
+                time.sleep(2)
                 continue
             else:
-                # If we run out of retries, return the best effort we got
                 return result_text
                 
         except Exception as e:
@@ -233,9 +240,27 @@ elif st.session_state["authentication_status"]:
         st.write(f'Welcome back, *{st.session_state["name"]}*')
         authenticator.logout('Logout', 'main')
         st.divider()
+        
         st.header("Project Settings")
-        client_url = st.text_input("Client Website URL", "https://en.wikipedia.org/wiki/Search_engine_optimization")
-        run_audit = st.button("Start Full AI Audit")
+        
+        # New speed control toggle
+        scrape_engine = st.radio("Scraping Engine", ["Fast HTML (Requests - Blazing Fast)", "Deep JS (Playwright - Slow)"])
+        
+        st.divider()
+        
+        input_mode = st.radio("Input Mode", ["Single URL", "Multiple URLs (Manual)", "Sitemap.xml (Auto-Extract)"])
+        
+        if input_mode == "Single URL":
+            client_input = st.text_input("Client Website URL", "https://en.wikipedia.org/wiki/Search_engine_optimization")
+            max_pages = 1
+        elif input_mode == "Multiple URLs (Manual)":
+            client_input = st.text_area("Enter URLs (one per line)", "https://en.wikipedia.org/wiki/Search_engine_optimization\nhttps://en.wikipedia.org/wiki/Digital_marketing")
+            max_pages = 5
+        else:
+            client_input = st.text_input("Sitemap XML URL", "https://en.wikipedia.org/sitemap.xml")
+            max_pages = st.slider("Max Pages to Crawl", 1, 10, 3)
+
+        run_audit = st.button("Start Batch AI Audit")
         
         if not gemini_key or gemini_key == "YOUR_ACTUAL_API_KEY":
             st.error("⚠️ Gemini API Key missing in config.yaml. The rewrite engine is disabled.")
@@ -244,107 +269,153 @@ elif st.session_state["authentication_status"]:
     st.title("🛡️ AuraSEO: Generative Engine Optimization Suite")
     st.markdown("### Auditing for the AI-First Web (ChatGPT, Claude, Gemini, Perplexity)")
 
-    if "audit_data" not in st.session_state:
-        st.session_state["audit_data"] = None
+    if "audit_batch_data" not in st.session_state:
+        st.session_state["audit_batch_data"] = []
 
     if run_audit:
-        if not sanitize_and_validate_url(client_url):
-            st.error("Security Alert: Invalid or disallowed URL format provided. Please enter a valid, public HTTP/HTTPS URL.")
+        # 1. Gather URLs based on Input Mode
+        urls_to_audit = []
+        if input_mode == "Single URL":
+            if sanitize_and_validate_url(client_input):
+                urls_to_audit.append(client_input)
+        elif input_mode == "Multiple URLs (Manual)":
+            raw_urls = client_input.split('\n')
+            for url in raw_urls:
+                clean_url = url.strip()
+                if sanitize_and_validate_url(clean_url):
+                    urls_to_audit.append(clean_url)
+            urls_to_audit = urls_to_audit[:max_pages] # Enforce safety limits
+        elif input_mode == "Sitemap.xml (Auto-Extract)":
+            if sanitize_and_validate_url(client_input):
+                with st.spinner("Extracting URLs from Sitemap..."):
+                    urls_to_audit = extract_urls_from_sitemap(client_input, max_pages)
+                if not urls_to_audit:
+                    st.error("Could not extract valid <loc> URLs from the provided sitemap.")
+                    st.stop()
+
+        if not urls_to_audit:
+            st.error("Security Alert: No valid HTTP/HTTPS URLs found to process.")
             st.stop()
 
-        with st.spinner("Executing dual-engine scraper..."):
-            crawler_status = check_ai_crawlers(client_url)
-            passages, site_title = audit_content_readiness(client_url)
-            
-            st.session_state["audit_data"] = {
-                "crawler_status": crawler_status,
-                "passages": passages,
-                "site_title": site_title,
-                "client_url": client_url
-            }
+        # 2. Execute Batch Loop
+        batch_results = []
+        progress_bar = st.progress(0)
+        
+        for idx, url in enumerate(urls_to_audit):
+            with st.spinner(f"Auditing page {idx + 1} of {len(urls_to_audit)}: {url}"):
+                crawler_status = check_ai_crawlers(url)
+                # Pass the engine choice to the readiness function
+                passages, site_title = audit_content_readiness(url, scrape_engine)
+                
+                batch_results.append({
+                    "url": url,
+                    "title": site_title,
+                    "crawler_status": crawler_status,
+                    "passages": passages
+                })
+                progress_bar.progress((idx + 1) / len(urls_to_audit))
+                
+                # Only sleep if we aren't using the slow Playwright engine, 
+                # as Playwright takes long enough to not get rate-limited natively.
+                if scrape_engine == "Fast HTML (Requests - Blazing Fast)":
+                    time.sleep(1) 
+        
+        st.session_state["audit_batch_data"] = batch_results
 
-    if st.session_state["audit_data"]:
-        cached_data = st.session_state["audit_data"]
-        crawler_status = cached_data["crawler_status"]
-        passages = cached_data["passages"]
-        site_title = cached_data["site_title"]
-        url_to_use = cached_data["client_url"]
+    # 3. Render Tabbed UI from Session State
+    if st.session_state["audit_batch_data"]:
+        batch_data = st.session_state["audit_batch_data"]
+        
+        # Create dynamic tabs using the site titles
+        tab_names = [f"{data['title'][:25]}..." if len(data['title']) > 25 else data['title'] for data in batch_data]
+        tabs = st.tabs(tab_names)
+        
+        for tab_idx, tab in enumerate(tabs):
+            with tab:
+                data = batch_data[tab_idx]
+                crawler_status = data["crawler_status"]
+                passages = data["passages"]
+                site_title = data["title"]
+                url_to_use = data["url"]
 
-        st.header("1. AI Crawler Accessibility")
-        cols = st.columns(4)
-        for i, (bot, status) in enumerate(crawler_status.items()):
-            color = "green" if "Allowed" in status else "red"
-            cols[i % 4].metric(bot, status, delta_color="normal" if color == "green" else "inverse")
+                st.markdown(f"**Target URL:** `{url_to_use}`")
 
-        st.header("2. AI Citation Readiness & Rewrite Engine")
-        if passages:
-            optimal_count = sum(1 for p in passages if p["Status"] == "Optimal")
-            optimal_pct = (optimal_count / len(passages)) * 100
-            st.progress(optimal_pct / 100)
-            st.write(f"**Optimization Score:** {optimal_pct:.1f}% of content is in the 'Citation Magic Range' (134-167 words).")
-            
-            st.divider()
-            for i, p in enumerate(passages):
-                with st.container():
-                    col_text, col_action = st.columns([4, 1])
+                st.header("1. AI Crawler Accessibility")
+                cols = st.columns(4)
+                for i, (bot, status) in enumerate(crawler_status.items()):
+                    color = "green" if "Allowed" in status else "red"
+                    cols[i % 4].metric(bot, status, delta_color="normal" if color == "green" else "inverse")
+
+                st.header("2. AI Citation Readiness & Rewrite Engine")
+                if passages:
+                    optimal_count = sum(1 for p in passages if p["Status"] == "Optimal")
+                    optimal_pct = (optimal_count / len(passages)) * 100
+                    st.progress(optimal_pct / 100)
+                    st.write(f"**Optimization Score:** {optimal_pct:.1f}% of content is in the 'Citation Magic Range' (134-167 words).")
                     
-                    with col_text:
-                        if p["Status"] == "Optimal":
-                            st.success(f"**{p['Words']} words:** {p['Full_Passage']}")
-                        else:
-                            st.warning(f"**{p['Words']} words:** {p['Full_Passage']}")
-                            
-                    with col_action:
-                        if p["Status"] != "Optimal" and gemini_client:
-                            if st.button(f"✨ Auto-Rewrite", key=f"rewrite_{i}"):
-                                with st.spinner("Agentic Rewrite in Progress (This may take a few seconds if self-correction is required)..."):
-                                    new_text = rewrite_paragraph_with_gemini(p["Full_Passage"])
-                                    
-                                    if new_text.startswith("API Error") or new_text.startswith("Error"):
-                                        st.error(f"Failed to generate: {new_text}")
-                                    else:
-                                        new_word_count = len(new_text.split())
-                                        st.info(f"**New Text ({new_word_count} words):**\n\n{new_text}")
-                                        
-                                        if 134 <= new_word_count <= 167:
-                                            st.success("Target Achieved!")
-                                        else:
-                                            st.error("Target Missed. Try again.")
-                                        
                     st.divider()
-        else:
-            if isinstance(site_title, str) and ("Error" in site_title or "Failed" in site_title):
-                st.error(site_title)
-            else:
-                st.warning("No significant text passages found to audit. The site might still be heavily blocking headless browsers, or it relies purely on images instead of text paragraphs.")
+                    for p_idx, p in enumerate(passages):
+                        with st.container():
+                            col_text, col_action = st.columns([4, 1])
+                            
+                            with col_text:
+                                if p["Status"] == "Optimal":
+                                    st.success(f"**{p['Words']} words:** {p['Full_Passage']}")
+                                else:
+                                    st.warning(f"**{p['Words']} words:** {p['Full_Passage']}")
+                                    
+                            with col_action:
+                                if p["Status"] != "Optimal" and gemini_client:
+                                    # Ensure unique keys for buttons across multiple tabs
+                                    if st.button(f"✨ Auto-Rewrite", key=f"rewrite_{tab_idx}_{p_idx}"):
+                                        with st.spinner("Agentic Rewrite in Progress..."):
+                                            new_text = rewrite_paragraph_with_gemini(p["Full_Passage"])
+                                            
+                                            if new_text.startswith("API Error") or new_text.startswith("Error"):
+                                                st.error(f"Failed to generate: {new_text}")
+                                            else:
+                                                new_word_count = len(new_text.split())
+                                                st.info(f"**New Text ({new_word_count} words):**\n\n{new_text}")
+                                                
+                                                if 134 <= new_word_count <= 167:
+                                                    st.success("Target Achieved!")
+                                                else:
+                                                    st.error("Target Missed. Try again.")
+                                                
+                            st.divider()
+                else:
+                    if isinstance(site_title, str) and ("Error" in site_title or "Failed" in site_title):
+                        st.error(site_title)
+                    else:
+                        st.warning("No significant text passages found to audit. The site might still be blocking headless browsers, or it relies purely on images.")
 
-        st.header("3. AI Discovery Files")
-        if passages:
-            llms_text = generate_llms_txt(url_to_use, site_title, passages)
-            st.code(llms_text, language="markdown")
-            st.download_button("Download llms.txt", llms_text, file_name="llms.txt")
-        else:
-            st.info("Discovery file generation paused due to lack of valid text data.")
+                st.header("3. AI Discovery Files")
+                if passages:
+                    llms_text = generate_llms_txt(url_to_use, site_title, passages)
+                    st.code(llms_text, language="markdown")
+                    st.download_button("Download llms.txt", llms_text, file_name=f"llms_{tab_idx}.txt", key=f"dl_txt_{tab_idx}")
+                else:
+                    st.info("Discovery file generation paused due to lack of valid text data.")
 
-        st.header("4. Cross-Platform Brand Presence")
-        mention_data = {p: "Found" if i % 2 == 0 else "Missing" for i, p in enumerate(PLATFORMS)}
-        st.table(pd.DataFrame(mention_data.items(), columns=["Platform", "Presence"]))
+                st.header("4. Cross-Platform Brand Presence")
+                mention_data = {platform: "Found" if i % 2 == 0 else "Missing" for i, platform in enumerate(PLATFORMS)}
+                st.table(pd.DataFrame(mention_data.items(), columns=["Platform", "Presence"]))
 
-        def create_pdf(url, score):
-            buffer = io.BytesIO()
-            p = canvas.Canvas(buffer, pagesize=letter)
-            p.setFont("Helvetica-Bold", 16)
-            p.drawString(100, 750, f"AuraSEO Audit Report: {url}")
-            p.setFont("Helvetica", 12)
-            p.drawString(100, 730, f"AI Visibility Score: {score:.1f}%")
-            p.drawString(100, 710, "Action Plan:")
-            p.drawString(120, 690, "1. Update robots.txt to allow OAI-SearchBot and ClaudeBot.")
-            p.drawString(120, 670, "2. Refactor H2 sections to meet the 134-167 word 'magic range'.")
-            p.drawString(120, 650, "3. Deploy the generated llms.txt to the root directory.")
-            p.showPage()
-            p.save()
-            buffer.seek(0)
-            return buffer
+                def create_pdf(url, score):
+                    buffer = io.BytesIO()
+                    pdf = canvas.Canvas(buffer, pagesize=letter)
+                    pdf.setFont("Helvetica-Bold", 16)
+                    pdf.drawString(100, 750, f"AuraSEO Audit Report: {url}")
+                    pdf.setFont("Helvetica", 12)
+                    pdf.drawString(100, 730, f"AI Visibility Score: {score:.1f}%")
+                    pdf.drawString(100, 710, "Action Plan:")
+                    pdf.drawString(120, 690, "1. Update robots.txt to allow OAI-SearchBot and ClaudeBot.")
+                    pdf.drawString(120, 670, "2. Refactor H2 sections to meet the 134-167 word 'magic range'.")
+                    pdf.drawString(120, 650, "3. Deploy the generated llms.txt to the root directory.")
+                    pdf.showPage()
+                    pdf.save()
+                    buffer.seek(0)
+                    return buffer
 
-        pdf_report = create_pdf(url_to_use, optimal_pct if passages else 0)
-        st.download_button("📄 Download Client PDF Report", pdf_report, "Audit_Report.pdf", "application/pdf")
+                pdf_report = create_pdf(url_to_use, optimal_pct if passages else 0)
+                st.download_button("📄 Download Client PDF Report", pdf_report, f"Audit_Report_{tab_idx}.pdf", "application/pdf", key=f"dl_pdf_{tab_idx}")
